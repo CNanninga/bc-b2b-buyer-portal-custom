@@ -1,0 +1,572 @@
+import { store } from '@/store';
+import { channelId, storeHash } from '@/utils/basicConfig';
+import { getActiveCurrencyInfo } from '@/utils/currencyUtils';
+import { convertArrayToGraphql } from '@/utils/graphqlDataConvert';
+
+import B3Request from '../../request/b3Fetch';
+
+interface ProductPurchasable {
+  productId: number;
+  isProduct: boolean;
+  sku: string;
+}
+
+export type CatalogQuickVariantSku = CustomFieldItems & {
+  variantSku?: string;
+  inventoryTracking?: string;
+  availableToSell?: number;
+  unlimitedBackorder?: boolean;
+  totalOnHand?: number | null;
+  backorderMessage?: string | null;
+};
+
+const getVariantInfoBySkusQuery = (skuList: string[]) => `
+query GetVariantInfoBySkus {
+  variantSku (
+    variantSkus: ${convertArrayToGraphql(skuList)},
+    storeHash: "${storeHash}"
+    channelId: ${channelId}
+  ){
+    isStock,
+    stock,
+    calculatedPrice,
+    productId,
+    variantId,
+    baseSku,
+    productName,
+    categories,
+    option,
+    isVisible,
+    minQuantity,
+    maxQuantity,
+    modifiers,
+    purchasingDisabled,
+    variantSku,
+    imageUrl,
+    inventoryTracking,
+    availableToSell,
+    unlimitedBackorder,
+    totalOnHand,
+    backorderMessage,
+  }
+}`;
+
+const getProductPurchasable = ({
+  sku = '',
+  isProduct = true,
+  productId,
+}: ProductPurchasable) => `query GetProductPurchasable {
+  productPurchasable(
+    storeHash: "${storeHash}"
+    productId: ${Number(productId)},
+    sku: "${sku}",
+    isProduct: ${isProduct}
+    ){
+    availability
+    inventoryLevel
+    inventoryTracking
+    purchasingDisabled
+    availableToSell
+    unlimitedBackorder
+  }
+}`;
+
+const getSearchProductsQuery = (data: CustomFieldItems, useVariablesImplementation: boolean) => {
+  if (useVariablesImplementation) {
+    return `
+  query SearchProducts(
+    $search: String,
+    $productIds: [Int!]!,
+    $currencyCode: String,
+    $companyId: String,
+    $storeHash: String,
+    $channelId: Int,
+    $customerGroupId: Int,
+    ${data?.categoryFilter ? `$categoryFilter: Boolean,` : ''}
+  ) {
+    productsSearch (
+      search: $search,
+      productIds: $productIds,
+      currencyCode: $currencyCode,
+      companyId: $companyId,
+      storeHash: $storeHash,
+      channelId: $channelId,
+      customerGroupId: $customerGroupId,
+      ${data?.categoryFilter ? `categoryFilter: $categoryFilter,` : ''}
+    ){
+      id,
+      name,
+      sku,
+      costPrice,
+      inventoryLevel,
+      inventoryTracking,
+      availability,
+      orderQuantityMinimum,
+      orderQuantityMaximum,
+      variants,
+      currencyCode,
+      imageUrl,
+      modifiers,
+      options,
+      optionsV3,
+      channelId,
+      productUrl,
+      taxClassId,
+      isPriceHidden,
+      availableToSell,
+      unlimitedBackorder,
+      totalOnHand,
+      backorderMessage,
+    }
+  }
+`;
+  }
+  return `
+  query SearchProducts {
+    productsSearch (
+      search: "${data.search || ''}"
+      productIds: [${data.productIds || []}]
+      currencyCode: "${data.currencyCode || ''}"
+      companyId: "${data.companyId || ''}"
+      storeHash: "${storeHash}"
+      channelId: ${channelId}
+      customerGroupId: ${data.customerGroupId || 0}
+      ${data?.categoryFilter ? `categoryFilter: ${data?.categoryFilter}` : ''}
+    ){
+      id,
+      name,
+      sku,
+      costPrice,
+      inventoryLevel,
+      inventoryTracking,
+      availability,
+      orderQuantityMinimum,
+      orderQuantityMaximum,
+      variants,
+      currencyCode,
+      imageUrl,
+      modifiers,
+      options,
+      optionsV3,
+      channelId,
+      productUrl,
+      taxClassId,
+      isPriceHidden,
+      availableToSell,
+      unlimitedBackorder,
+      totalOnHand,
+      backorderMessage
+    }
+  }
+`;
+};
+
+const validateProductQuery = `
+  query ValidateProduct ($productId: Int!, $variantId: Int!, $quantity: Int!, $productOptions: [GenericScalar], $target: String) {
+    validateProduct(
+      productId: $productId
+      variantId: $variantId
+      quantity: $quantity
+      productOptions: $productOptions
+      storeHash: "${storeHash}"
+      channelId: ${channelId}
+      target: $target
+    ) {
+      responseType
+      message
+      errorCode
+      product {
+        availableToSell
+      }
+    }
+  }
+`;
+
+const validateProductsQuery = `
+  query ValidateProducts ($products: [ValidateProductInputType]!, $target: String) {
+    validateProducts(products: $products, storeHash: "${storeHash}", channelId: ${channelId}, target: $target) {
+      isValid
+      products {
+        errorCode
+        responseType
+        message
+        product {
+          productId
+          variantId
+          sku
+          availableToSell
+          unlimitedBackorder
+        }
+      }
+    }
+  }
+`;
+
+const productsBulkUploadCSV = (data: CustomFieldItems) => `mutation ProductUpload {
+  productUpload (
+    productListData: {
+      currencyCode: "${data.currencyCode || ''}"
+      productList: ${convertArrayToGraphql(data.productList || [])}
+      ${!data?.channelId ? '' : `channelId: ${data.channelId}`}
+      isToCart: ${data.isToCart || false}
+      withModifiers: ${data.withModifiers || false}
+    }
+  ) {
+    result {
+      errorFile,
+      errorProduct,
+      validProduct,
+      stockErrorFile,
+      stockErrorSkus,
+    }
+  }
+}`;
+
+const productAnonUploadBulkUploadCSV = (data: CustomFieldItems) => `mutation {
+  productAnonUpload (
+    productListData: {
+      currencyCode: "${data.currencyCode || ''}"
+      productList: ${convertArrayToGraphql(data.productList || [])}
+      ${!data?.channelId ? '' : `channelId: ${data.channelId}`}
+      isToCart: ${data.isToCart || false}
+      withModifiers: ${data.withModifiers || false}
+      storeHash: "${storeHash}"
+    }
+  ) {
+    result {
+      errorFile,
+      errorProduct,
+      validProduct,
+      stockErrorFile,
+      stockErrorSkus,
+    }
+  }
+}`;
+
+export const getVariantInfoBySkus = (skuList: string[] = []) =>
+  B3Request.graphqlB2B({ query: getVariantInfoBySkusQuery(skuList) });
+
+export interface B2BProductPurchasableResponse {
+  data: {
+    productPurchasable: {
+      availability: 'available' | 'disabled';
+      availableToSell?: number;
+      inventoryLevel: number;
+      inventoryTracking: 'none' | 'product' | 'variant';
+      purchasingDisabled: boolean;
+      unlimitedBackorder?: boolean;
+    };
+  };
+}
+
+export const getB2BProductPurchasable = (data: ProductPurchasable) =>
+  B3Request.graphqlB2B<B2BProductPurchasableResponse>({
+    query: getProductPurchasable(data),
+  });
+
+export interface ProductSearch {
+  id: number;
+  name: string;
+  sku: string;
+  costPrice: string;
+  inventoryLevel: number;
+  inventoryTracking: string;
+  availability: string;
+  orderQuantityMinimum: number;
+  orderQuantityMaximum: number;
+  variants: {
+    variant_id: number;
+    product_id: number;
+    sku: string;
+    option_values: {
+      id: number;
+      label: string;
+      option_id: number;
+      option_display_name: string;
+    }[];
+    calculated_price: number;
+    image_url: string;
+    has_price_list: boolean;
+    bulk_prices: unknown[];
+    purchasing_disabled: boolean;
+    cost_price: number;
+    inventory_level: number;
+    bc_calculated_price: {
+      as_entered: number;
+      tax_inclusive: number;
+      tax_exclusive: number;
+      entered_inclusive: boolean;
+    };
+  }[];
+  currencyCode: string;
+  imageUrl: string;
+  modifiers: unknown[];
+  options: {
+    option_id: number;
+    display_name: string;
+    sort_order: number;
+    is_required: boolean;
+  }[];
+  optionsV3: {
+    id: number;
+    product_id: number;
+    name: string;
+    display_name: string;
+    type: string;
+    sort_order: number;
+    option_values: {
+      id: number;
+      label: string;
+      sort_order: number;
+      value_data: unknown | null;
+      is_default: boolean;
+    }[];
+    config: unknown[];
+  }[];
+  channelId: unknown[];
+  productUrl: string;
+  taxClassId: number;
+  isPriceHidden: boolean;
+  availableToSell?: number;
+  unlimitedBackorder?: boolean;
+  totalOnHand?: number | null;
+  backorderMessage?: string | null;
+}
+
+export interface B2BProducts {
+  data: {
+    productsSearch: ProductSearch[];
+  };
+}
+
+export interface SearchProductsResponse {
+  data: {
+    productsSearch: Array<{
+      id: number;
+      name: string;
+      sku: string;
+      costPrice: string;
+      inventoryLevel: number;
+      inventoryTracking: string;
+      availability: string;
+      orderQuantityMinimum: number;
+      orderQuantityMaximum: number;
+      variants: Array<{
+        variant_id: number;
+        product_id: number;
+        sku: string;
+        option_values: Array<{
+          id: number;
+          label: string;
+          option_id: number;
+          option_display_name: string;
+        }>;
+        calculated_price: number;
+        image_url: string;
+        has_price_list: boolean;
+        bulk_prices: Array<unknown>;
+        purchasing_disabled: boolean;
+        cost_price: number;
+        inventory_level: number;
+        available_to_sell: number;
+        unlimited_backorder: boolean;
+        total_on_hand?: number | null;
+        backorder_message?: string | null;
+        bc_calculated_price: {
+          as_entered: number;
+          tax_inclusive: number;
+          tax_exclusive: number;
+          entered_inclusive: boolean;
+        };
+      }>;
+      currencyCode: string;
+      imageUrl: string;
+      modifiers: Array<unknown>;
+      options: Array<{
+        option_id: number;
+        display_name: string;
+        sort_order: number;
+        is_required: boolean;
+      }>;
+      optionsV3: Array<{
+        id: number;
+        product_id: number;
+        name: string;
+        display_name: string;
+        type: string;
+        sort_order: number;
+        option_values: Array<{
+          id: number;
+          label: string;
+          sort_order: number;
+          value_data: unknown;
+          is_default: boolean;
+        }>;
+        config: Array<unknown>;
+      }>;
+      channelId: Array<unknown>;
+      productUrl: string;
+      taxClassId: number;
+      isPriceHidden: boolean;
+      availableToSell: number;
+      unlimitedBackorder: boolean;
+      totalOnHand?: number | null;
+      backorderMessage?: string | null;
+    }>;
+  };
+}
+
+/**
+ * Validation error codes returned by the product validation API.
+ * Used for typing API responses and for QUOTE_VALIDATION_ERROR_CODES (quote display).
+ */
+const PRODUCT_VALIDATION_ERROR_CODES = {
+  OOS: 'OOS',
+  NON_PURCHASABLE: 'NON_PURCHASABLE',
+  INVALID_FIELDS: 'INVALID_FIELDS',
+  OTHER: 'OTHER',
+} as const;
+
+export type ProductValidationErrorCode =
+  (typeof PRODUCT_VALIDATION_ERROR_CODES)[keyof typeof PRODUCT_VALIDATION_ERROR_CODES];
+
+/**
+ * Quote validation error codes: API codes plus NETWORK_ERROR (client-side).
+ * Re-exported from getQuoteValidationErrorMessage for consumers that need the full set.
+ */
+export const QUOTE_VALIDATION_ERROR_CODES = {
+  ...PRODUCT_VALIDATION_ERROR_CODES,
+  NETWORK_ERROR: 'NETWORK_ERROR',
+} as const;
+
+interface ValidateProductSuccess {
+  responseType: 'SUCCESS';
+  message: string;
+}
+
+interface ValidateProductError {
+  responseType: 'ERROR';
+  errorCode: ProductValidationErrorCode;
+  message: string;
+  product: {
+    availableToSell: number;
+  };
+}
+
+interface ValidateProductWarning {
+  responseType: 'WARNING';
+  message: string;
+}
+
+export interface ValidateProductResponse {
+  data: {
+    validateProduct: ValidateProductSuccess | ValidateProductWarning | ValidateProductError;
+  };
+}
+
+interface ValidateProductsResponse {
+  data: {
+    validateProducts: {
+      isValid: boolean;
+      products: {
+        errorCode: ProductValidationErrorCode;
+        responseType: 'SUCCESS' | 'WARNING' | 'ERROR';
+        message: string;
+        product: {
+          productId: number;
+          variantId: number;
+          sku: string;
+          availableToSell: number;
+          unlimitedBackorder: boolean;
+        };
+      }[];
+    };
+  };
+}
+
+export const searchProducts = (data: CustomFieldItems = {}) => {
+  const { currency_code: currencyCode } = getActiveCurrencyInfo();
+
+  const { featureFlags } = store.getState().global;
+  // This feature flag has a different name to the variable, however it is intended to be enabled at
+  // the same time. Once the GQL limit increases are permanently rolled out, logic in this repo should
+  // remain in place, as a general improvement to the code.
+  const separateQueryAndVariablesForProductSearches =
+    featureFlags['B2B-3705.increase_graphql_limits_inline_with_platform_api'];
+
+  if (separateQueryAndVariablesForProductSearches) {
+    return B3Request.graphqlB2B({
+      query: getSearchProductsQuery(data, true),
+      variables: {
+        search: data?.search || '',
+        // One of the calls to this API uses productId values that have been returned from the
+        // backend as strings.
+        // This is incorrect for the datatype, but in sending the values back as variables rather
+        // than interpolated into the query, we need to force-cast until proper types are enforced
+        // in the model.
+        productIds: data?.productIds ? data?.productIds.map(Number) : [],
+        currencyCode: data?.currencyCode || currencyCode || '',
+        companyId: `${data?.companyId || ''}`,
+        storeHash,
+        channelId,
+        customerGroupId: data?.customerGroupId || 0,
+        ...(data?.categoryFilter ? { categoryFilter: data?.categoryFilter } : {}),
+      },
+    });
+  }
+  return B3Request.graphqlB2B({
+    query: getSearchProductsQuery(
+      {
+        ...data,
+        currencyCode: data?.currencyCode || currencyCode,
+      },
+      false,
+    ),
+  });
+};
+
+export type ValidationTarget = 'QUOTE' | 'CART';
+
+interface ValidateProductVariables {
+  productId: number;
+  variantId: number;
+  quantity: number;
+  productOptions?: {
+    optionId: number;
+    optionValue: string;
+  }[];
+  target?: ValidationTarget;
+}
+interface ValidateProductsVariables {
+  products: Omit<ValidateProductVariables, 'target'>[];
+  target?: ValidationTarget;
+}
+
+export const validateProduct = (data: ValidateProductVariables) => {
+  return B3Request.graphqlB2B<ValidateProductResponse>({
+    query: validateProductQuery,
+    variables: data,
+  }).then((res) => res.validateProduct);
+};
+
+export const validateProducts = (data: ValidateProductsVariables) => {
+  return B3Request.graphqlB2B<ValidateProductsResponse>({
+    query: validateProductsQuery,
+    variables: data,
+  }).then((res) => res.validateProducts);
+};
+
+export const B2BProductsBulkUploadCSV = (data: CustomFieldItems = {}) =>
+  B3Request.graphqlB2B({
+    query: productsBulkUploadCSV(data),
+  }).then((res) => res.productUpload);
+
+export const BcProductsBulkUploadCSV = (data: CustomFieldItems = {}) =>
+  B3Request.graphqlB2B({
+    query: productsBulkUploadCSV(data),
+  }).then((res) => res.productUpload);
+
+export const guestProductsBulkUploadCSV = (data: CustomFieldItems = {}) =>
+  B3Request.graphqlB2B({
+    query: productAnonUploadBulkUploadCSV(data),
+  }).then((res) => res.productAnonUpload);

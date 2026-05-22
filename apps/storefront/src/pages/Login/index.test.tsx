@@ -1,0 +1,447 @@
+import userEvent from '@testing-library/user-event';
+import {
+  buildCompanyStateWith,
+  graphql,
+  HttpResponse,
+  renderWithProviders,
+  screen,
+  startMockServer,
+  waitFor,
+} from 'tests/test-utils';
+
+import { CustomerRole } from '@/types';
+import { snackbar } from '@/utils/b3Tip';
+import { getCurrentCustomerInfo } from '@/utils/loginInfo';
+
+import LoginPage from './index';
+import LoginForm from './LoginForm';
+import { useLogout } from './useLogout';
+
+vi.mock('./useLogout', () => ({
+  useLogout: vi.fn(() => vi.fn()),
+}));
+
+vi.mock('@/utils/loginInfo');
+
+const { server } = startMockServer();
+
+describe('LoginPage', () => {
+  beforeEach(() => {
+    vi.spyOn(snackbar, 'error');
+  });
+
+  describe('successful login and redirects', () => {
+    it('should redirect junior buyer to /shoppingLists after successful login', async () => {
+      vi.mock('@/hooks/useB2BCallback');
+
+      server.use(
+        graphql.mutation('Login', () => {
+          return HttpResponse.json({
+            data: {
+              login: {
+                result: {
+                  storefrontLoginToken: '456',
+                  token: '123',
+                  permissions: [{ code: '1', permissionLevel: 1 }],
+                },
+              },
+            },
+          });
+        }),
+      );
+
+      vi.mocked(getCurrentCustomerInfo).mockResolvedValue({
+        userType: 5,
+        role: 2,
+        companyRoleName: 'Junior Buyer',
+      });
+
+      const { navigation } = renderWithProviders(<LoginPage setOpenPage={vi.fn()} />);
+
+      await userEvent.type(screen.getByLabelText('Email address *'), 'test@example.com');
+      await userEvent.type(screen.getByLabelText('Password *'), 'Password123');
+      await userEvent.keyboard('{Enter}');
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading...')).not.toBeInTheDocument();
+      });
+
+      await waitFor(() => {
+        expect(navigation).toHaveBeenCalledWith(expect.stringContaining('/shoppingLists'));
+      });
+    });
+
+    it('should redirect SuperAdmin to /dashboard after successful login', async () => {
+      vi.mock('@/hooks/useB2BCallback');
+
+      server.use(
+        graphql.mutation('Login', () => {
+          return HttpResponse.json({
+            data: {
+              login: {
+                result: {
+                  storefrontLoginToken: '456',
+                  token: '123',
+                  permissions: [{ code: '1', permissionLevel: 1 }],
+                },
+              },
+            },
+          });
+        }),
+      );
+
+      vi.mocked(getCurrentCustomerInfo).mockResolvedValue({
+        userType: 3,
+        role: 3,
+        companyRoleName: 'SuperAdmin',
+      });
+
+      const { navigation } = renderWithProviders(<LoginPage setOpenPage={vi.fn()} />);
+
+      await userEvent.type(screen.getByLabelText('Email address *'), 'test@example.com');
+      await userEvent.type(screen.getByLabelText('Password *'), 'Password123');
+      await userEvent.keyboard('{Enter}');
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading...')).not.toBeInTheDocument();
+      });
+
+      await waitFor(() => {
+        expect(navigation).toHaveBeenCalledWith(expect.stringContaining('/dashboard'));
+      });
+    });
+  });
+
+  describe('failed login attempts show appropriate error messages', () => {
+    const renderLoginAndSubmit = async () => {
+      renderWithProviders(<LoginPage setOpenPage={vi.fn()} />);
+
+      await userEvent.type(screen.getByLabelText('Email address *'), 'test@example.com');
+      await userEvent.type(screen.getByLabelText('Password *'), 'Password123');
+      await userEvent.keyboard('{Enter}');
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading...')).not.toBeInTheDocument();
+      });
+    };
+
+    it('should show error message for invalid login credentials', async () => {
+      const logoutMock = vi.fn();
+      vi.mocked(useLogout).mockReturnValue(logoutMock);
+
+      server.use(
+        graphql.mutation('Login', () => {
+          return HttpResponse.json({
+            errors: [
+              {
+                message: 'Invalid Login',
+              },
+            ],
+            data: {
+              login: null,
+            },
+          });
+        }),
+      );
+
+      await renderLoginAndSubmit();
+
+      await waitFor(() => {
+        expect(snackbar.error).toHaveBeenCalledWith(
+          "Your email address or password is incorrect. Please try again. If you've forgotten your sign in details, just click the 'Forgot your password?' link below.",
+        );
+      });
+    });
+
+    it('should show pending approval message for features/products/pricing and logout silently', async () => {
+      const logoutMock = vi.fn();
+      vi.mocked(useLogout).mockReturnValue(logoutMock);
+
+      server.use(
+        graphql.mutation('Login', () => {
+          return HttpResponse.json({
+            errors: [
+              {
+                message:
+                  'Your business account is pending approval. You will gain access to business account features, products, and pricing after account approval.',
+              },
+            ],
+            data: {
+              login: null,
+            },
+          });
+        }),
+      );
+
+      await renderLoginAndSubmit();
+
+      await waitFor(() => {
+        expect(snackbar.error).toHaveBeenCalledWith(
+          'Your business account is pending approval. You will gain access to business account features, products, and pricing after account approval.',
+        );
+      });
+
+      await waitFor(() => {
+        expect(logoutMock).toHaveBeenCalledWith({ showLogoutBanner: false });
+      });
+    });
+
+    it('should show pending approval message for products/pricing/ordering and logout silently', async () => {
+      const logoutMock = vi.fn();
+      vi.mocked(useLogout).mockReturnValue(logoutMock);
+
+      server.use(
+        graphql.mutation('Login', () => {
+          return HttpResponse.json({
+            errors: [
+              {
+                message:
+                  'Your business account is pending approval. Products, pricing, and ordering will be enabled after account approval.',
+              },
+            ],
+            data: {
+              login: null,
+            },
+          });
+        }),
+      );
+
+      await renderLoginAndSubmit();
+
+      await waitFor(() => {
+        expect(snackbar.error).toHaveBeenCalledWith(
+          'Your business account is pending approval. Products, pricing, and ordering will be enabled after account approval.',
+        );
+      });
+      await waitFor(() => {
+        expect(logoutMock).toHaveBeenCalledWith({ showLogoutBanner: false });
+      });
+    });
+
+    it('should show pending approval message for business features and logout silently', async () => {
+      const logoutMock = vi.fn();
+      vi.mocked(useLogout).mockReturnValue(logoutMock);
+
+      server.use(
+        graphql.mutation('Login', () => {
+          return HttpResponse.json({
+            errors: [
+              {
+                message:
+                  'Your business account is pending approval. You will gain access to business account features after account approval.',
+              },
+            ],
+            data: {
+              login: null,
+            },
+          });
+        }),
+      );
+
+      await renderLoginAndSubmit();
+
+      await waitFor(() => {
+        expect(snackbar.error).toHaveBeenCalledWith(
+          'Your business account is pending approval. You will gain access to business account features after account approval.',
+        );
+      });
+
+      await waitFor(() => {
+        expect(logoutMock).toHaveBeenCalledWith({ showLogoutBanner: false });
+      });
+    });
+
+    it('should show inactive account message and logout silently', async () => {
+      const logoutMock = vi.fn();
+      vi.mocked(useLogout).mockReturnValue(logoutMock);
+
+      server.use(
+        graphql.mutation('Login', () => {
+          return HttpResponse.json({
+            errors: [
+              {
+                message:
+                  'This business account is inactive. Reach out to our support team to reactivate your account.',
+              },
+            ],
+            data: {
+              login: null,
+            },
+          });
+        }),
+      );
+
+      await renderLoginAndSubmit();
+
+      await waitFor(() => {
+        expect(snackbar.error).toHaveBeenCalledWith(
+          'This business account is inactive. Reach out to our support team to reactivate your account.',
+        );
+      });
+
+      await waitFor(() => {
+        expect(logoutMock).toHaveBeenCalledWith({ showLogoutBanner: false });
+      });
+    });
+  });
+
+  describe('loading state prevents duplicate submit', () => {
+    it('passes isLoading to LoginForm so Sign In button can be disabled', async () => {
+      renderWithProviders(<LoginPage setOpenPage={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading...')).not.toBeInTheDocument();
+      });
+
+      const signInButton = screen.getByRole('button', { name: 'SIGN IN' });
+      expect(signInButton).toBeEnabled();
+    });
+  });
+
+  describe('LoginForm', () => {
+    it('disables Sign In button when isLoading is true', () => {
+      const handleLoginSubmit = vi.fn();
+
+      renderWithProviders(
+        <LoginForm
+          loginBtn="SIGN IN"
+          handleLoginSubmit={handleLoginSubmit}
+          backgroundColor="#FFF"
+          isLoading
+        />,
+      );
+
+      const signInButton = screen.getByRole('button', { name: 'SIGN IN' });
+      expect(signInButton).toBeDisabled();
+    });
+
+    it('enables Sign In button when isLoading is false', () => {
+      const handleLoginSubmit = vi.fn();
+
+      renderWithProviders(
+        <LoginForm
+          loginBtn="SIGN IN"
+          handleLoginSubmit={handleLoginSubmit}
+          backgroundColor="#FFF"
+          isLoading={false}
+        />,
+      );
+
+      const signInButton = screen.getByRole('button', { name: 'SIGN IN' });
+      expect(signInButton).toBeEnabled();
+    });
+  });
+
+  describe('URL parameter-driven logout behavior', () => {
+    it('should logout with banner when loginFlag=loggedOutLogin and user is logged in', async () => {
+      const logoutMock = vi.fn();
+      vi.mocked(useLogout).mockReturnValue(logoutMock);
+
+      const preloadedState = {
+        company: buildCompanyStateWith({
+          customer: {
+            role: CustomerRole.ADMIN,
+          },
+          tokens: {
+            B2BToken: 'test-token',
+            bcGraphqlToken: '',
+            currentCustomerJWT: '',
+          },
+        }),
+      };
+
+      renderWithProviders(<LoginPage setOpenPage={vi.fn()} />, {
+        preloadedState,
+        initialEntries: ['/?loginFlag=loggedOutLogin'],
+      });
+
+      await waitFor(() => {
+        expect(logoutMock).toHaveBeenCalledWith({ showLogoutBanner: true });
+      });
+    });
+
+    it.each([
+      'pendingApprovalToViewPrices',
+      'pendingApprovalToOrder',
+      'pendingApprovalToAccessFeatures',
+      'accountInactive',
+      'loggedOutLogin',
+    ] as const)(
+      'should logout without banner when loginFlag=%s and user is not logged in',
+      async (loginFlag) => {
+        const logoutMock = vi.fn();
+        vi.mocked(useLogout).mockReturnValue(logoutMock);
+
+        // User is not logged in (GUEST role)
+        const preloadedState = {
+          company: buildCompanyStateWith({
+            customer: {
+              role: CustomerRole.GUEST,
+            },
+            tokens: {
+              B2BToken: '',
+              bcGraphqlToken: '',
+              currentCustomerJWT: '',
+            },
+          }),
+        };
+
+        renderWithProviders(<LoginPage setOpenPage={vi.fn()} />, {
+          preloadedState,
+          initialEntries: [`/?loginFlag=${loginFlag}`],
+        });
+
+        await waitFor(() => {
+          expect(logoutMock).toHaveBeenCalledWith({ showLogoutBanner: false });
+        });
+      },
+    );
+
+    it('should not logout when loginFlag is not a logout-triggering flag', async () => {
+      const logoutMock = vi.fn();
+      vi.mocked(useLogout).mockReturnValue(logoutMock);
+
+      const preloadedState = {
+        company: buildCompanyStateWith({
+          customer: {
+            role: CustomerRole.ADMIN,
+          },
+          tokens: {
+            B2BToken: 'test-token',
+            bcGraphqlToken: '',
+            currentCustomerJWT: '',
+          },
+        }),
+      };
+
+      renderWithProviders(<LoginPage setOpenPage={vi.fn()} />, {
+        preloadedState,
+        initialEntries: ['/?loginFlag=accountIncorrect'],
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading...')).not.toBeInTheDocument();
+      });
+
+      // Should not call logout for flags not in shouldLogout array
+      expect(logoutMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('logo rendering', () => {
+    it('renders the merchant logo when isLogoLoaded is true and logo is set', async () => {
+      const merchantLogoUrl = 'https://cdn.example.com/b2bLogo.png';
+
+      renderWithProviders(<LoginPage setOpenPage={vi.fn()} />, {
+        initialGlobalContext: {
+          isLogoLoaded: true,
+          logo: merchantLogoUrl,
+        },
+      });
+
+      const logoImage = await screen.findByAltText('register Logo');
+      expect(logoImage).toBeVisible();
+      expect(logoImage).toHaveAttribute('src', merchantLogoUrl);
+    });
+  });
+});

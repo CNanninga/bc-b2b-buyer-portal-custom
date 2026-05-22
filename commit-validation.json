@@ -1,0 +1,30 @@
+{
+  "scopes": [
+    "account",
+    "addresses",
+    "agents",
+    "carts",
+    "catalyst",
+    "common",
+    "companies",
+    "company-hierarchy",
+    "company-orders",
+    "dashboard",
+    "docs",
+    "headless",
+    "invoice-payment",
+    "invoices",
+    "login",
+    "orders",
+    "permissions",
+    "products",
+    "quick-order",
+    "quotes",
+    "register",
+    "shopping-lists",
+    "translation",
+    "user-management",
+    "deps",
+    "deps-dev"
+  ]
+}
