@@ -5,7 +5,6 @@ import { Alert, Box, Typography } from '@mui/material';
 import { B3CustomForm } from '@/components/B3CustomForm';
 import { Captcha } from '@/components/captcha/Captcha';
 import { getContrastColor } from '@/components/outSideComponents/utils/b3CustomStyles';
-import { useFeatureFlag } from '@/hooks/useFeatureFlag';
 import { useB3Lang } from '@/lib/lang';
 import { CustomStyleContext } from '@/shared/customStyleButton/context';
 import { GlobalContext } from '@/shared/global';
@@ -29,6 +28,7 @@ import {
 import { createCompany } from './createCompany';
 import { createCustomer } from './createCustomer';
 import { registerCompany } from './registerCompany';
+import { registerCustomer } from '@/shared/service/bc/graphql/customer';
 
 interface CompleteStepProps {
   handleBack: () => void;
@@ -39,7 +39,7 @@ type CompleteStepList = Array<RegisterFields> | undefined;
 
 export default function CompleteStep(props: CompleteStepProps) {
   const b3Lang = useB3Lang();
-  const isRegisterCompanyFlowEnabled = useFeatureFlag('B2B-4466.use_register_company_flow');
+  const isRegisterCompanyFlowEnabled = true;
   const { handleBack, handleNext } = props;
   const [personalInfo, setPersonalInfo] = useState<Array<CustomFieldItems>>([]);
   const [errorMessage, setErrorMessage] = useState<string>('');
@@ -286,13 +286,25 @@ export default function CompleteStep(props: CompleteStepProps) {
           } else {
             const attachmentsList = companyInformation.filter((list) => list.fieldType === 'files');
             const fileList = await getFileUrl(attachmentsList || []);
-            const { customerId, customerEmail } = await createCustomer(
-              { password, confirmPassword },
-              createCustomerContext,
-            );
+
+            await ensureBcStorefrontGraphqlToken();
+
+            const customerRes = await registerCustomer({
+              firstName: (list?.find((item) => item.label === 'First Name')?.default || '').toString(),
+              lastName: (list?.find((item) => item.label === 'Last Name')?.default || '').toString(),
+         
+              email: enterEmail,
+              password,
+            });
+            
+            const customer = customerRes.data?.customer?.registerCustomer?.customer;
+            const customerId = customer?.entityId;
+            const customerEmail = customer?.email;
+            if (!customerId || !customerEmail) {
+              throw new Error('Failed to register customer');
+            }
 
             if (isRegisterCompanyFlowEnabled) {
-              await ensureBcStorefrontGraphqlToken();
 
               const customerDetails = await loginAndGetBcCustomer(
                 {

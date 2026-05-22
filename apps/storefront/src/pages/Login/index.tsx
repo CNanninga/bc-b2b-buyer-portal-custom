@@ -116,7 +116,6 @@ function Login(props: PageProps) {
       const { token, storefrontLoginToken, errors } = await performB2BLogin(data);
 
       storeDispatch(setB2BToken(token));
-      customerLoginAPI(storefrontLoginToken);
       dispatchEvent('on-login', { storefrontToken: storefrontLoginToken });
 
       if (
